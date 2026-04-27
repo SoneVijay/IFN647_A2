@@ -6,7 +6,7 @@
 import os
 import math
 import string
-import scipy.stats as stats
+import numpy as np
 from stemming.porter2 import stem
 
 # ============================================================
