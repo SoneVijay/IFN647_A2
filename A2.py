@@ -855,7 +855,7 @@ def validate_model_c_parameters(
 # ============================================================
 
 if __name__ == "__main__":
-    os.chdir("/Users/bmscanoza/Desktop/IFN647A2")
+    os.chdir("/Users/bmscanoza/Desktop/IFN647_A2")
 
     # Task 3: Run all models on all datasets and save .dat files
     run_all_models()
