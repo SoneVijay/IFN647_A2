@@ -1,6 +1,7 @@
 # ============================================================
 # IFN647 – Assignment 2 | Complete Implementation
 # Student: BONN MICHAEL S. CANOZA | N12349208
+# Maganda
 # ============================================================
 
 import os
