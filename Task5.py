@@ -25,7 +25,7 @@ def significance_test(results, measure="AP"):
     t2, p2 = stats.ttest_rel(mc_scores, b2_scores)
 
     print(f"\n{'='*60}")
-    print(f"Task 5 – Significance Test (Paired t-test) | Measure: {measure}")
+    print(f"Task 5 - Significance Test (Paired t-test) | Measure: {measure}")
     print(f"{'='*60}")
     print(f"  Model_C vs Baseline1: t = {t1:.4f},  p = {p1:.4f}",
           "--> SIGNIFICANT" if p1 < 0.05 else "--> not significant")

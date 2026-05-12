@@ -7,8 +7,6 @@ import os
 import math
 from utils import OUTPUT_DIR, REL_DIR, parse_topics
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
 
 # =============================================================================
 # Relevance loading and ranking loading
