@@ -1,7 +1,7 @@
 """
 IFN647 Assignment 2 - Grid Search for Task 2 Model C Parameters (unsupervised).
 
-Selects PRF_K, LAM, and TOP_TERMS for the KL-Divergence Relevance Model
+Selects PRF_PCT and LAM for the KL-Divergence Relevance Model
 WITHOUT accessing relevance judgement files.
 
 Evaluation metric (RM IDF Quality — fully unsupervised):
@@ -22,11 +22,11 @@ Evaluation metric (RM IDF Quality — fully unsupervised):
   No relevance judgement files are read.
 
 Grid:
-  prf_k     [5, 10, 15, 20]
-  lam       [0.05, 0.1, 0.3, 0.5]
-  top_terms [50, 100, 0]          (0 = all vocab terms from top-k docs)
+  prf_k [5, 10, 15, 20]
+  lam   [0.05, 0.1, 0.3, 0.5]
 
-Total: 4 x 4 x 3 = 48 combinations.
+Total: 4 x 4 = 16 combinations.
+All vocabulary terms from the pseudo-relevant documents are always used.
 """
 
 import os
@@ -43,9 +43,8 @@ from Task1 import bm_25
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 GRID = {
-    'prf_k':     [5, 10, 15, 20],
-    'lam':       [0.05, 0.1, 0.3, 0.5],
-    'top_terms': [50, 100, 0],
+    'prf_k': [5, 10, 15, 20],
+    'lam':   [0.05, 0.1, 0.3, 0.5],
 }
 
 
@@ -54,8 +53,8 @@ GRID = {
 # =============================================================================
 
 def _build_rm(query_tf, ranked_bm25, collection, coll_freq, filt_size,
-              prf_k, lam, top_terms):
-    """Build and return the (optionally truncated, normalised) relevance model."""
+              prf_k, lam):
+    """Build and return the normalised relevance model over the top-k doc vocabulary."""
     top_docs = ranked_bm25[:prf_k]
     if not top_docs:
         return {}
@@ -102,12 +101,6 @@ def _build_rm(query_tf, ranked_bm25, collection, coll_freq, filt_size,
     total_rm = sum(rm.values())
     if total_rm > 0:
         rm = {t: v / total_rm for t, v in rm.items()}
-
-    if top_terms > 0 and len(rm) > top_terms:
-        rm = dict(sorted(rm.items(), key=lambda x: x[1], reverse=True)[:top_terms])
-        total_rm = sum(rm.values())
-        if total_rm > 0:
-            rm = {t: v / total_rm for t, v in rm.items()}
 
     return rm
 
@@ -177,92 +170,88 @@ def grid_search(stopword_file=None):
         print(f"  {topic_id}")
 
     # ------------------------------------------------------------------
-    # Grid search over (prf_k, lam, top_terms)
+    # Grid search over (prf_k, lam)
     # ------------------------------------------------------------------
-    combos = list(product(GRID['prf_k'], GRID['lam'], GRID['top_terms']))
+    combos = list(product(GRID['prf_k'], GRID['lam']))
     total  = len(combos)
     print(f"\nSearching {total} combinations "
-          f"(prf_k x lam x top_terms = "
-          f"{len(GRID['prf_k'])}x{len(GRID['lam'])}x{len(GRID['top_terms'])}) ...\n")
+          f"(prf_k x lam = "
+          f"{len(GRID['prf_k'])}x{len(GRID['lam'])}) ...\n")
 
-    hdr = f"{'prf_k':>6} {'lam':>5} {'terms':>6}  {'IDF quality':>11}"
+    hdr = f"{'prf_k':>6} {'lam':>5}  {'IDF quality':>11}"
     print(hdr)
     print("-" * len(hdr))
 
     best_params = None
     best_idf    = -1.0
 
-    for i, (prf_k, lam, top_terms) in enumerate(combos, 1):
+    for i, (prf_k, lam) in enumerate(combos, 1):
         idf_scores = []
-        for tid, pc in precomp.items():
+        for pc in precomp.values():
             rm = _build_rm(
                 pc['query_tf'], pc['ranked_bm25'], pc['collection'],
                 pc['coll_freq'], pc['filt_size'],
-                prf_k, lam, top_terms,
+                prf_k, lam,
             )
             if rm:
                 idf_scores.append(_idf_quality(rm, pc['inv_index'], pc['N']))
 
         mean_idf = sum(idf_scores) / len(idf_scores) if idf_scores else 0.0
-        term_lbl = "all" if top_terms == 0 else str(top_terms)
         marker   = "  <-- best" if mean_idf > best_idf else ""
 
-        print(f"{prf_k:>6} {lam:>5.2f} {term_lbl:>6}  {mean_idf:>11.4f}  [{i}/{total}]{marker}")
+        print(f"{prf_k:>6} {lam:>5.2f}  {mean_idf:>11.4f}  [{i}/{total}]{marker}")
 
         if mean_idf > best_idf:
             best_idf    = mean_idf
-            best_params = dict(prf_k=prf_k, lam=lam, top_terms=top_terms,
-                               idf_quality=mean_idf)
+            best_params = dict(prf_k=prf_k, lam=lam, idf_quality=mean_idf)
 
     # ------------------------------------------------------------------
-    # Summary
+    # Summary: per-parameter sensitivity tables + best result
     # ------------------------------------------------------------------
-    # Per-parameter sensitivity summary (at best lam, best prf_k)
     best_lam = best_params['lam']
-    best_prf = best_params['prf_k']
+    best_k   = best_params['prf_k']
 
-    lam_vals = sorted(GRID['lam'])
-    prf_vals = sorted(GRID['prf_k'])
-
-    print("\n--- Lambda sensitivity (prf_k=%d, top_terms=all) ---" % best_prf)
-    for lam in lam_vals:
+    # Lambda sensitivity (hold prf_k=best)
+    lam_idf = {}
+    print(f"\n--- Lambda sensitivity (prf_k={best_k}) ---")
+    for lam in sorted(GRID['lam']):
         idfs = []
-        for tid, pc in precomp.items():
+        for pc in precomp.values():
             rm = _build_rm(pc['query_tf'], pc['ranked_bm25'], pc['collection'],
-                           pc['coll_freq'], pc['filt_size'], best_prf, lam, 0)
+                           pc['coll_freq'], pc['filt_size'], best_k, lam)
             if rm:
                 idfs.append(_idf_quality(rm, pc['inv_index'], pc['N']))
         v = sum(idfs) / len(idfs) if idfs else 0.0
-        print(f"  lam={lam:.2f}  IDF quality={v:.4f}")
+        lam_idf[lam] = v
+        marker = "  <-- best" if lam == best_lam else ""
+        print(f"  lam={lam:.2f}  IDF quality={v:.4f}{marker}")
 
-    print("\n--- PRF_K sensitivity (lam=%.2f, top_terms=all) ---" % best_lam)
-    for pk in prf_vals:
+    # PRF_K sensitivity (hold lam=best)
+    prf_idf = {}
+    print(f"\n--- PRF_K sensitivity (lam={best_lam:.2f}) ---")
+    for k in sorted(GRID['prf_k']):
         idfs = []
-        for tid, pc in precomp.items():
+        for pc in precomp.values():
             rm = _build_rm(pc['query_tf'], pc['ranked_bm25'], pc['collection'],
-                           pc['coll_freq'], pc['filt_size'], pk, best_lam, 0)
+                           pc['coll_freq'], pc['filt_size'], k, best_lam)
             if rm:
                 idfs.append(_idf_quality(rm, pc['inv_index'], pc['N']))
         v = sum(idfs) / len(idfs) if idfs else 0.0
-        print(f"  prf_k={pk:>2}  IDF quality={v:.4f}")
+        prf_idf[k] = v
+        marker = "  <-- best" if k == best_k else ""
+        print(f"  prf_k={k:>2}  IDF quality={v:.4f}{marker}")
+
+    lam_range = max(lam_idf.values()) - min(lam_idf.values())
+    prf_range = max(prf_idf.values()) - min(prf_idf.values())
 
     print("\n" + "=" * 60)
-    print("Grid search findings (no relevance judgements used):")
+    print("Best parameters found (no relevance judgements used):")
+    print(f"  PRF_K = {best_params['prf_k']}")
+    print(f"  LAM   = {best_params['lam']}")
+    print(f"  IDF quality (mean across topics) = {best_params['idf_quality']:.4f}")
     print()
-    print("  LAM is the dominant parameter: IDF quality drops sharply")
-    print("  as lambda increases (collection smoothing dilutes the RM")
-    print("  with common, low-IDF terms). -> lam=0.05 selected.")
-    print()
-    print("  PRF_K has minimal effect on IDF quality (variation < 0.01")
-    print("  across all tested values). prf_k=15 chosen for robustness:")
-    print("  more pseudo-relevant evidence without off-topic vocabulary.")
-    print()
-    print("  TOP_TERMS=all maximises raw IDF quality. top_terms=100")
-    print("  chosen for Task2.py: it prunes the lowest-probability")
-    print("  (often noisiest) terms while preserving the high-IDF core.")
-    print()
-    print("  Parameters used in Task2.py: PRF_K=15  LAM=0.05  TOP_TERMS=100")
-    print("  No ground-truth relevance labels were used in this selection.")
+    print(f"  Lambda effect: IDF quality range = {lam_range:.4f} across tested values")
+    print(f"  PRF_K effect:  IDF quality range = {prf_range:.4f} across tested values")
     print("=" * 60)
 
     return best_params
