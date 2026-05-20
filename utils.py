@@ -5,9 +5,9 @@ Document/query parsing, collection helpers, and output functions.
 """
 
 import os
-import math
 import re
 import string
+from collections import defaultdict
 from stemming.porter2 import stem
 
 BASE_DIR    = os.path.dirname(os.path.abspath(__file__))
@@ -218,6 +218,15 @@ def collection_term_freq(coll):
 def collection_size(coll):
     """Total word occurrences across the collection."""
     return sum(doc.get_doc_size() for doc in coll.values())
+
+
+def build_inv_index(coll):
+    """Returns {term: {docid: freq}} inverted index for a collection."""
+    inv_index = defaultdict(dict)
+    for docid, doc in coll.items():
+        for term, freq in doc.terms.items():
+            inv_index[term][docid] = freq
+    return dict(inv_index)
 
 
 def save_ranking(output_path, scores, score_name, query_title):

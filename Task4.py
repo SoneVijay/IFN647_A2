@@ -1,13 +1,12 @@
 """
 IFN647 Assignment 2 - Task 4: Evaluation
 Computes AP, P@10, and DCG@10 for all three models across all topics.
+Models: Baseline1 (BM25), Baseline2 (JM), ModelC (KL + gap-detected K).
 """
 
 import os
 import math
 from utils import OUTPUT_DIR, REL_DIR, parse_topics
-
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 # =============================================================================
@@ -107,63 +106,52 @@ def evaluate_all_models(
 
     all_topics = sorted(results["Baseline1"].keys())
     n          = len(all_topics)
+    W   = 58  # table width for 3 model columns
+    HDR = f"{'Topic':<10} {'Baseline1':>12} {'Baseline2':>12} {'Model_C':>12}"
 
-    # Table 1: Average Precision
-    print("\n" + "=" * 65)
-    print("Table 1. Performance of 3 models on Average Precision (AP)")
-    print(f"{'Topic':<10} {'Baseline1':>12} {'Baseline2':>12} {'Model_C':>12}")
-    print("-" * 65)
-    ap_sums = {m: 0.0 for m in models}
-    for topic_id in all_topics:
-        row = f"{topic_id:<10}"
-        for model in models:
-            val = results[model].get(topic_id, {}).get("AP", 0.0)
-            ap_sums[model] += val
-            row += f"{val:>12.3f}"
-        print(row)
-    print("-" * 65)
-    map_row = f"{'MAP':<10}"
-    for model in models:
-        map_row += f"{ap_sums[model]/n if n > 0 else 0:>12.3f}"
-    print(map_row)
+    os.makedirs(output_folder, exist_ok=True)
 
-    # Table 2: Precision@10
-    print("\n" + "=" * 65)
-    print("Table 2. Performance of 3 models on Precision@10")
-    print(f"{'Topic':<10} {'Baseline1':>12} {'Baseline2':>12} {'Model_C':>12}")
-    print("-" * 65)
-    p10_sums = {m: 0.0 for m in models}
-    for topic_id in all_topics:
-        row = f"{topic_id:<10}"
+    def _print_and_save_table(title, metric, filename):
+        lines = []
+        lines.append("=" * W)
+        lines.append(title)
+        lines.append(HDR)
+        lines.append("-" * W)
+        sums = {m: 0.0 for m in models}
+        for topic_id in all_topics:
+            row = f"{topic_id:<10}"
+            for model in models:
+                val = results[model].get(topic_id, {}).get(metric, 0.0)
+                sums[model] += val
+                row += f"{val:>12.3f}"
+            lines.append(row)
+        lines.append("-" * W)
+        label  = "MAP" if metric == "AP" else "Average"
+        footer = f"{label:<10}"
         for model in models:
-            val = results[model].get(topic_id, {}).get("P@10", 0.0)
-            p10_sums[model] += val
-            row += f"{val:>12.3f}"
-        print(row)
-    print("-" * 65)
-    avg_row = f"{'Average':<10}"
-    for model in models:
-        avg_row += f"{p10_sums[model]/n if n > 0 else 0:>12.3f}"
-    print(avg_row)
+            footer += f"{sums[model]/n if n > 0 else 0:>12.3f}"
+        lines.append(footer)
 
-    # Table 3: DCG@10
-    print("\n" + "=" * 65)
-    print("Table 3. Performance of 3 models on DCG@10")
-    print(f"{'Topic':<10} {'Baseline1':>12} {'Baseline2':>12} {'Model_C':>12}")
-    print("-" * 65)
-    dcg_sums = {m: 0.0 for m in models}
-    for topic_id in all_topics:
-        row = f"{topic_id:<10}"
-        for model in models:
-            val = results[model].get(topic_id, {}).get("DCG10", 0.0)
-            dcg_sums[model] += val
-            row += f"{val:>12.3f}"
-        print(row)
-    print("-" * 65)
-    avg_row = f"{'Average':<10}"
-    for model in models:
-        avg_row += f"{dcg_sums[model]/n if n > 0 else 0:>12.3f}"
-    print(avg_row)
+        output = "\n".join(lines)
+        print("\n" + output)
+
+        path = os.path.join(output_folder, filename)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(output + "\n")
+        print(f"[SAVED] {path}")
+
+    _print_and_save_table(
+        "Table 1. Performance of 3 models on Average Precision (AP)",
+        "AP", "Results_AP.txt",
+    )
+    _print_and_save_table(
+        "Table 2. Performance of 3 models on Precision@10",
+        "P@10", "Results_P10.txt",
+    )
+    _print_and_save_table(
+        "Table 3. Performance of 3 models on DCG@10",
+        "DCG10", "Results_DCG10.txt",
+    )
 
     return results
 
