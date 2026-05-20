@@ -161,29 +161,20 @@ def queryParser(query, stop_words):
 
 
 def parse_topics(topic_file=TOPICS_FILE):
-    """Parse Topics.txt; returns {topic_id: title}."""
+    """Parse Topics.txt using regex; returns {topic_id: title}."""
     with open(topic_file, "r", encoding="utf-8", errors="ignore") as f:
         content = f.read()
 
     topics = {}
-    for block in content.split("<Topic>"):
-        if "<num>" not in block:
+    for block in re.finditer(r"<Topic>(.*?)</Topic>", content, re.DOTALL | re.IGNORECASE):
+        text = block.group(1)
+        num_m   = re.search(r"<num>\s*(.*?)\s*(?:</num>|<title>|<desc>|<narr>)", text, re.DOTALL | re.IGNORECASE)
+        title_m = re.search(r"<title>\s*(.*?)\s*(?:</title>|<desc>|<narr>|$)", text, re.DOTALL | re.IGNORECASE)
+        if not num_m or not title_m:
             continue
-        num_raw = block.split("<num>", 1)[1]
-        for end_tag in ["</num>", "<title>", "<desc>", "<narr>"]:
-            if end_tag in num_raw:
-                num_raw = num_raw.split(end_tag, 1)[0]
-                break
-        num_part = num_raw.strip()
-
-        title_raw = block.split("<title>", 1)[1] if "<title>" in block else ""
-        for end_tag in ["</title>", "<desc>", "<narr>", "</Topic>"]:
-            if end_tag in title_raw:
-                title_raw = title_raw.split(end_tag, 1)[0]
-                break
-
-        topic_id = num_part[num_part.find("R"):].strip() if "R" in num_part else num_part
-        topics[topic_id] = title_raw.strip()
+        num_str  = num_m.group(1).strip()
+        topic_id = num_str[num_str.find("R"):].strip() if "R" in num_str else num_str
+        topics[topic_id] = title_m.group(1).strip()
 
     return topics
 
