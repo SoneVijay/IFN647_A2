@@ -1,25 +1,23 @@
 """
 IFN647 Assignment 2 - Task 2: Custom Model (Model_C)
-KL-Divergence Relevance Model with gap-based automatic PRF set size.
+KL-Divergence Relevance Model with gap-based automatic PRF set size and RM3.
 
-Identical pipeline to the fixed-K version (alt/Task2_FixedK.py) except
-PRF_K is determined automatically from the BM25 score distribution:
+Pipeline:
+  1. BM25 initial ranking + gap-based PRF_K detection in [MIN_K, MAX_K)
+  2. JM-smoothed query-likelihood weights for top-K docs
+  3. Build relevance model P(w|R) via weighted sum over top-K vocab
+  4. RM3 interpolation: rm3 = ALPHA*P(w|R) + (1-ALPHA)*P(w|Q)
+  5. Score all docs by log-likelihood under rm3
 
 Gap-based detection:
-  After ranking by BM25, compute consecutive score differences:
-    gap[i] = score[i] - score[i+1]   for i in [MIN_K, MAX_K)
-  The largest gap indicates where the score curve drops most sharply —
-  a natural boundary between the likely-relevant cluster and the rest.
-  K is set to the position just above this gap (i + 1 documents used).
+  gap[i] = score[i] - score[i+1]  for i in [MIN_K, MAX_K)
+  K = position of the largest gap (natural boundary in BM25 score curve).
 
-Intuition: BM25 scores for genuinely relevant documents tend to be clustered
-near the top, separated by a clear drop from non-relevant documents. The gap
-method finds this boundary without needing relevance labels.
-
-Parameters (selected by unsupervised grid search in GridSearch_Task2_GapK.py):
-  MIN_K = 5    smallest allowed pseudo-relevant set size
-  MAX_K = 20   upper bound on the search window for the gap
-  LAM   = 0.05 Jelinek-Mercer smoothing lambda
+Parameters (selected by GridSearch_Task2.py):
+  MIN_K = 5     smallest allowed pseudo-relevant set size
+  MAX_K = 20    upper bound on the gap search window
+  LAM   = 0.05  Jelinek-Mercer smoothing lambda
+  ALPHA = 0.5   RM3 interpolation weight (P(w|R) vs P(w|Q))
 """
 
 import os
@@ -35,6 +33,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MIN_K = 5
 MAX_K = 20
 LAM   = 0.05
+ALPHA = 0.7
 
 
 # =============================================================================
@@ -59,7 +58,7 @@ def _detect_k(ranked_bm25, bm25_scores, min_k, max_k):
 # Model C – KL-Divergence Relevance Model with gap-based PRF set size
 # =============================================================================
 
-def model_c(query_tf, collection, inv_index, avdl, coll_freq, filt_size):
+def model_c(query_tf, collection, inv_index, avdl, coll_freq, filt_size, alpha=ALPHA):
     """Score all documents using KL-divergence RM; PRF set size detected from score gaps.
 
     Args:
@@ -126,12 +125,19 @@ def model_c(query_tf, collection, inv_index, avdl, coll_freq, filt_size):
     if total_rm > 0:
         rm = {t: v / total_rm for t, v in rm.items()}
 
+    # RM3: interpolate P(w|R) with original query distribution P(w|Q)
+    total_qf = sum(query_tf.values())
+    p_q      = {t: qf / total_qf for t, qf in query_tf.items()}
+    rm3      = {}
+    for term in set(rm) | set(p_q):
+        rm3[term] = alpha * rm.get(term, 0.0) + (1 - alpha) * p_q.get(term, 0.0)
+
     # Step 4: Score all documents by log-likelihood under the relevance model
     scores = {}
     for docid, doc in collection.items():
         dl    = doc.get_doc_size()
         score = 0.0
-        for term, p_w_r in rm.items():
+        for term, p_w_r in rm3.items():
             tf_d  = doc.terms.get(term, 0)
             cf_t  = coll_freq.get(term, 0)
             p_w_d = ((1 - LAM) * (tf_d / dl if dl > 0 else 0.0)
