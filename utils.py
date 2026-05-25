@@ -131,7 +131,7 @@ def docParser(stop_words, folder):
     Uses iso-8859-1 encoding to match the Reuters XML corpus.
     """
     collection = {}
-    for filename in os.listdir(folder):
+    for filename in sorted(os.listdir(folder)):
         if not filename.endswith('.xml'):
             continue
         with open(os.path.join(folder, filename), 'r',
