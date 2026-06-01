@@ -1,32 +1,21 @@
 """
-IFN647 Assignment 2 - Grid Search for Task 2 Model C Parameters (unsupervised).
+IFN647 Assignment 2 - Grid Search for Task2 Parameters (unsupervised).
 
-Selects PRF_PCT and LAM for the KL-Divergence Relevance Model
-WITHOUT accessing relevance judgement files.
+Selects MAX_K, LAM, and ALPHA for the gap-based KL model with RM3.
+MIN_K is fixed at 5.
 
-Evaluation metric (RM IDF Quality — fully unsupervised):
-  For each parameter combination and each topic, build the relevance model R
-  and compute its weighted average IDF:
+Gap detection: largest BM25 score drop within [MIN_K, MAX_K) positions.
+RM3: rm3 = alpha * P(w|R) + (1-alpha) * P(w|Q)
 
-    IDF_quality(R) = sum_w  P(w|R) * log(N / df(w))
-
-  where N = collection size, df(w) = document frequency of term w.
-
-  A higher IDF quality means the RM concentrates probability mass on
-  topic-discriminative terms rather than common collection-wide terms.
-  This is desirable: query expansion with high-IDF terms produces more
-  focused, precise rankings than expansion with common terms.
-
-  Mean IDF quality across all topics is used to rank parameter combinations.
-
-  No relevance judgement files are read.
+Evaluation metric: RM3 IDF Quality (fully unsupervised)
+  IDF_quality = sum_w  rm3(w) * log(N / df(w))
 
 Grid:
-  prf_k [5, 10, 15, 20]
+  max_k [10, 20, 30, 50]
   lam   [0.05, 0.1, 0.3, 0.5]
+  alpha [0.1, 0.3, 0.5, 0.7]
 
-Total: 4 x 4 = 16 combinations.
-All vocabulary terms from the pseudo-relevant documents are always used.
+Total: 4 x 4 x 4 = 64 combinations.
 """
 
 import os
@@ -41,25 +30,33 @@ from utils import (
 from Task1 import bm_25
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+MIN_K    = 5
 
 GRID = {
-    'prf_k': [5, 10, 15, 20],
+    'max_k': [10, 20, 30, 50],
     'lam':   [0.05, 0.1, 0.3, 0.5],
+    'alpha': [0.1, 0.3, 0.5, 0.7],
 }
 
 
-# =============================================================================
-# Relevance model builder
-# =============================================================================
+def _detect_k(ranked_bm25, bm25_scores, min_k, max_k):
+    n        = len(ranked_bm25)
+    limit    = min(max_k, n - 1)
+    best_gap = -1.0
+    best_k   = min_k
+    for i in range(min_k - 1, limit):
+        gap = bm25_scores[ranked_bm25[i]] - bm25_scores[ranked_bm25[i + 1]]
+        if gap > best_gap:
+            best_gap = gap
+            best_k   = i + 1
+    return best_k
 
-def _build_rm(query_tf, ranked_bm25, collection, coll_freq, filt_size,
-              prf_k, lam):
-    """Build and return the normalised relevance model over the top-k doc vocabulary."""
+
+def _build_rm3(query_tf, ranked_bm25, collection, coll_freq, filt_size, prf_k, lam, alpha):
     top_docs = ranked_bm25[:prf_k]
     if not top_docs:
         return {}
 
-    # Document weights: log P(D|q) proportional to sum_q tf(q,Q)*log P(q|D)
     log_w = {}
     for docid in top_docs:
         doc = collection[docid]
@@ -79,7 +76,6 @@ def _build_rm(query_tf, ranked_bm25, collection, coll_freq, filt_size,
     if total_w > 0:
         weights = {d: w / total_w for d, w in weights.items()}
 
-    # Relevance model over top-k document vocabulary
     vocab = set()
     for docid in top_docs:
         vocab.update(collection[docid].terms.keys())
@@ -88,10 +84,10 @@ def _build_rm(query_tf, ranked_bm25, collection, coll_freq, filt_size,
     for term in vocab:
         p_w_r = 0.0
         for docid in top_docs:
-            doc  = collection[docid]
-            dl   = doc.get_doc_size()
-            tf_d = doc.terms.get(term, 0)
-            cf_t = coll_freq.get(term, 0)
+            doc   = collection[docid]
+            dl    = doc.get_doc_size()
+            tf_d  = doc.terms.get(term, 0)
+            cf_t  = coll_freq.get(term, 0)
             p_w_d = ((1 - lam) * (tf_d / dl if dl > 0 else 0.0)
                      + lam * (cf_t / filt_size if filt_size > 0 else 0.0))
             p_w_r += weights[docid] * p_w_d
@@ -102,20 +98,15 @@ def _build_rm(query_tf, ranked_bm25, collection, coll_freq, filt_size,
     if total_rm > 0:
         rm = {t: v / total_rm for t, v in rm.items()}
 
-    return rm
+    total_qf = sum(query_tf.values())
+    p_q      = {t: qf / total_qf for t, qf in query_tf.items()}
+    rm3      = {}
+    for term in set(rm) | set(p_q):
+        rm3[term] = alpha * rm.get(term, 0.0) + (1 - alpha) * p_q.get(term, 0.0)
+    return rm3
 
-
-# =============================================================================
-# IDF quality metric (unsupervised)
-# =============================================================================
 
 def _idf_quality(rm, inv_index, N):
-    """Weighted average IDF of the relevance model terms.
-
-    Measures how discriminative the RM's vocabulary is.
-    Higher = RM focuses on topic-specific terms (good for retrieval).
-    Lower  = RM is dominated by common collection terms (poor expansion).
-    """
     score = 0.0
     for term, p_rm in rm.items():
         df_t = len(inv_index.get(term, {}))
@@ -124,10 +115,6 @@ def _idf_quality(rm, inv_index, N):
     return score
 
 
-# =============================================================================
-# Grid search
-# =============================================================================
-
 def grid_search(stopword_file=None):
     if stopword_file is None:
         stopword_file = os.path.join(BASE_DIR, "common-english-words.txt")
@@ -135,9 +122,6 @@ def grid_search(stopword_file=None):
     stop_wordList = list(set(load_stopwords(stopword_file) + EXTRA_STOPWORDS))
     topics        = parse_topics()
 
-    # ------------------------------------------------------------------
-    # Precompute per-topic data (once)
-    # ------------------------------------------------------------------
     print("Precomputing BM25 rankings and collection statistics ...")
     precomp = {}
 
@@ -155,103 +139,109 @@ def grid_search(stopword_file=None):
         avdl      = avg_len(coll)
         N         = len(coll)
 
-        bm25        = bm_25(query_tf, coll, inv_index, avdl)
-        ranked_bm25 = sorted(bm25, key=bm25.get, reverse=True)
+        bm25_scores = bm_25(query_tf, coll, inv_index, avdl)
+        ranked_bm25 = sorted(bm25_scores, key=bm25_scores.get, reverse=True)
 
-        precomp[topic_id] = {
-            'query_tf':    query_tf,
-            'collection':  coll,
-            'inv_index':   inv_index,
-            'coll_freq':   cf,
-            'filt_size':   fs,
-            'ranked_bm25': ranked_bm25,
-            'N':           N,
-        }
+        precomp[topic_id] = dict(
+            query_tf=query_tf, collection=coll, inv_index=inv_index,
+            coll_freq=cf, filt_size=fs, ranked_bm25=ranked_bm25,
+            bm25_scores=bm25_scores, N=N,
+        )
         print(f"  {topic_id}")
 
-    # ------------------------------------------------------------------
-    # Grid search over (prf_k, lam)
-    # ------------------------------------------------------------------
-    combos = list(product(GRID['prf_k'], GRID['lam']))
+    combos = list(product(GRID['max_k'], GRID['lam'], GRID['alpha']))
     total  = len(combos)
-    print(f"\nSearching {total} combinations "
-          f"(prf_k x lam = "
-          f"{len(GRID['prf_k'])}x{len(GRID['lam'])}) ...\n")
+    print(f"\nSearching {total} combinations (min_k={MIN_K} fixed) ...\n")
 
-    hdr = f"{'prf_k':>6} {'lam':>5}  {'IDF quality':>11}"
+    hdr = f"{'max_k':>6} {'lam':>5} {'alpha':>6}  {'IDF quality':>11}  {'mean k':>6}"
     print(hdr)
     print("-" * len(hdr))
 
     best_params = None
     best_idf    = -1.0
 
-    for i, (prf_k, lam) in enumerate(combos, 1):
-        idf_scores = []
+    for i, (max_k, lam, alpha) in enumerate(combos, 1):
+        idf_scores  = []
+        detected_ks = []
         for pc in precomp.values():
-            rm = _build_rm(
-                pc['query_tf'], pc['ranked_bm25'], pc['collection'],
-                pc['coll_freq'], pc['filt_size'],
-                prf_k, lam,
-            )
-            if rm:
-                idf_scores.append(_idf_quality(rm, pc['inv_index'], pc['N']))
+            k = _detect_k(pc['ranked_bm25'], pc['bm25_scores'], MIN_K, max_k)
+            detected_ks.append(k)
+            rm3 = _build_rm3(pc['query_tf'], pc['ranked_bm25'], pc['collection'],
+                              pc['coll_freq'], pc['filt_size'], k, lam, alpha)
+            if rm3:
+                idf_scores.append(_idf_quality(rm3, pc['inv_index'], pc['N']))
 
         mean_idf = sum(idf_scores) / len(idf_scores) if idf_scores else 0.0
+        mean_k   = sum(detected_ks) / len(detected_ks) if detected_ks else 0.0
         marker   = "  <-- best" if mean_idf > best_idf else ""
-
-        print(f"{prf_k:>6} {lam:>5.2f}  {mean_idf:>11.4f}  [{i}/{total}]{marker}")
+        print(f"{max_k:>6} {lam:>5.2f} {alpha:>6.1f}  {mean_idf:>11.4f}  {mean_k:>6.1f}  [{i}/{total}]{marker}")
 
         if mean_idf > best_idf:
             best_idf    = mean_idf
-            best_params = dict(prf_k=prf_k, lam=lam, idf_quality=mean_idf)
+            best_params = dict(max_k=max_k, lam=lam, alpha=alpha,
+                               idf_quality=mean_idf, mean_k=mean_k)
 
-    # ------------------------------------------------------------------
-    # Summary: per-parameter sensitivity tables + best result
-    # ------------------------------------------------------------------
-    best_lam = best_params['lam']
-    best_k   = best_params['prf_k']
+    best_lam   = best_params['lam']
+    best_maxk  = best_params['max_k']
+    best_alpha = best_params['alpha']
 
-    # Lambda sensitivity (hold prf_k=best)
     lam_idf = {}
-    print(f"\n--- Lambda sensitivity (prf_k={best_k}) ---")
+    print(f"\n--- Lambda sensitivity (max_k={best_maxk}, alpha={best_alpha:.1f}) ---")
     for lam in sorted(GRID['lam']):
         idfs = []
         for pc in precomp.values():
-            rm = _build_rm(pc['query_tf'], pc['ranked_bm25'], pc['collection'],
-                           pc['coll_freq'], pc['filt_size'], best_k, lam)
-            if rm:
-                idfs.append(_idf_quality(rm, pc['inv_index'], pc['N']))
+            k = _detect_k(pc['ranked_bm25'], pc['bm25_scores'], MIN_K, best_maxk)
+            rm3 = _build_rm3(pc['query_tf'], pc['ranked_bm25'], pc['collection'],
+                              pc['coll_freq'], pc['filt_size'], k, lam, best_alpha)
+            if rm3:
+                idfs.append(_idf_quality(rm3, pc['inv_index'], pc['N']))
         v = sum(idfs) / len(idfs) if idfs else 0.0
         lam_idf[lam] = v
-        marker = "  <-- best" if lam == best_lam else ""
-        print(f"  lam={lam:.2f}  IDF quality={v:.4f}{marker}")
+        print(f"  lam={lam:.2f}  IDF quality={v:.4f}" + ("  <-- best" if lam == best_lam else ""))
 
-    # PRF_K sensitivity (hold lam=best)
-    prf_idf = {}
-    print(f"\n--- PRF_K sensitivity (lam={best_lam:.2f}) ---")
-    for k in sorted(GRID['prf_k']):
+    maxk_idf = {}
+    print(f"\n--- MAX_K sensitivity (lam={best_lam:.2f}, alpha={best_alpha:.1f}) ---")
+    for max_k in sorted(GRID['max_k']):
         idfs = []
         for pc in precomp.values():
-            rm = _build_rm(pc['query_tf'], pc['ranked_bm25'], pc['collection'],
-                           pc['coll_freq'], pc['filt_size'], k, best_lam)
-            if rm:
-                idfs.append(_idf_quality(rm, pc['inv_index'], pc['N']))
+            k = _detect_k(pc['ranked_bm25'], pc['bm25_scores'], MIN_K, max_k)
+            rm3 = _build_rm3(pc['query_tf'], pc['ranked_bm25'], pc['collection'],
+                              pc['coll_freq'], pc['filt_size'], k, best_lam, best_alpha)
+            if rm3:
+                idfs.append(_idf_quality(rm3, pc['inv_index'], pc['N']))
         v = sum(idfs) / len(idfs) if idfs else 0.0
-        prf_idf[k] = v
-        marker = "  <-- best" if k == best_k else ""
-        print(f"  prf_k={k:>2}  IDF quality={v:.4f}{marker}")
+        maxk_idf[max_k] = v
+        print(f"  max_k={max_k:>2}  IDF quality={v:.4f}" + ("  <-- best" if max_k == best_maxk else ""))
 
-    lam_range = max(lam_idf.values()) - min(lam_idf.values())
-    prf_range = max(prf_idf.values()) - min(prf_idf.values())
+    alpha_idf = {}
+    print(f"\n--- Alpha sensitivity (max_k={best_maxk}, lam={best_lam:.2f}) ---")
+    for alpha in sorted(GRID['alpha']):
+        idfs = []
+        for pc in precomp.values():
+            k = _detect_k(pc['ranked_bm25'], pc['bm25_scores'], MIN_K, best_maxk)
+            rm3 = _build_rm3(pc['query_tf'], pc['ranked_bm25'], pc['collection'],
+                              pc['coll_freq'], pc['filt_size'], k, best_lam, alpha)
+            if rm3:
+                idfs.append(_idf_quality(rm3, pc['inv_index'], pc['N']))
+        v = sum(idfs) / len(idfs) if idfs else 0.0
+        alpha_idf[alpha] = v
+        print(f"  alpha={alpha:.1f}  IDF quality={v:.4f}" + ("  <-- best" if alpha == best_alpha else ""))
+
+    lam_range   = max(lam_idf.values()) - min(lam_idf.values())
+    maxk_range  = max(maxk_idf.values()) - min(maxk_idf.values())
+    alpha_range = max(alpha_idf.values()) - min(alpha_idf.values())
 
     print("\n" + "=" * 60)
-    print("Best parameters found (no relevance judgements used):")
-    print(f"  PRF_K = {best_params['prf_k']}")
+    print("Best parameters (GapK + RM3, no relevance judgements used):")
+    print(f"  MIN_K = {MIN_K}  (fixed)")
+    print(f"  MAX_K = {best_params['max_k']}")
     print(f"  LAM   = {best_params['lam']}")
-    print(f"  IDF quality (mean across topics) = {best_params['idf_quality']:.4f}")
-    print()
-    print(f"  Lambda effect: IDF quality range = {lam_range:.4f} across tested values")
-    print(f"  PRF_K effect:  IDF quality range = {prf_range:.4f} across tested values")
+    print(f"  ALPHA = {best_params['alpha']}")
+    print(f"  IDF quality (mean) = {best_params['idf_quality']:.4f}")
+    print(f"  Mean detected k    = {best_params['mean_k']:.1f}")
+    print(f"  Lambda effect: range = {lam_range:.4f}")
+    print(f"  MAX_K effect:  range = {maxk_range:.4f}")
+    print(f"  Alpha effect:  range = {alpha_range:.4f}")
     print("=" * 60)
 
     return best_params
