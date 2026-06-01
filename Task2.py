@@ -17,7 +17,7 @@ Parameters (selected by GridSearch_Task2.py):
   MIN_K = 5     smallest allowed pseudo-relevant set size
   MAX_K = 20    upper bound on the gap search window
   LAM   = 0.05  Jelinek-Mercer smoothing lambda
-  ALPHA = 0.5   RM3 interpolation weight (P(w|R) vs P(w|Q))
+  ALPHA = 0.7   RM3 interpolation weight (P(w|R) vs P(w|Q))
 """
 
 import os
